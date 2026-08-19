@@ -433,14 +433,30 @@ document.getElementById("logoutBtn").addEventListener("click", ()=> signOut(auth
 
 function docRef(dayKey){ return doc(db, "users", user.uid, "days", dayKey); }
 async function loadDay(dayKey){
-  state = { beh:{}, quick:[false,false,false,false,false], note:"" };
+  state = { beh:{}, quick:[false,false,false,false,false], note:"", savedFocusIdx:null };
   try{
     const snap = await getDoc(docRef(dayKey));
-    if(snap.exists()){ const d=snap.data(); state.beh=d.beh||{}; state.quick=d.quick||[false,false,false,false,false]; state.note=d.note||""; }
+    if(snap.exists()){
+      const d=snap.data();
+      state.beh=d.beh||{};
+      state.quick=d.quick||[false,false,false,false,false];
+      state.note=d.note||"";
+      if(typeof d.focusIdx==="number") state.savedFocusIdx=d.focusIdx;
+    }
   }catch(e){}
 }
+// Welke laag hoort bij de nu geselecteerde dag?
+// Voor een reeds opgeslagen dag: gebruik de laag die tóén is bewaard (zodat vinkjes kloppen).
+// Voor een nieuwe/lege dag: bereken hem met de rotatie.
+function layerIdxForSelected(){
+  if(state.savedFocusIdx!==null && state.savedFocusIdx!==undefined) return state.savedFocusIdx;
+  return focusIndexFor(selectedDay);
+}
 async function save(){
-  const payload = { ...state, focusIdx: focusIndexFor(selectedDay), ts: new Date(selectedDay+"T12:00:00").getTime() };
+  // gebruik de al opgeslagen laag als die er is, anders de berekende van vandaag
+  const focusIdx = (state.savedFocusIdx!==null && state.savedFocusIdx!==undefined) ? state.savedFocusIdx : focusIndexFor(selectedDay);
+  state.savedFocusIdx = focusIdx; // vanaf nu ligt de laag voor deze dag vast
+  const payload = { beh:state.beh, quick:state.quick, note:state.note, focusIdx, ts: new Date(selectedDay+"T12:00:00").getTime() };
   try{ await setDoc(docRef(selectedDay), payload, { merge:true }); flashSaved(); }catch(e){}
 }
 function queueSave(){ clearTimeout(saveTimer); saveTimer=setTimeout(save, 400); }
@@ -513,7 +529,7 @@ function renderDay(view){
     return;
   }
 
-  const idx=focusIndexFor(selectedDay); const L=LAYERS[idx];
+  const idx=layerIdxForSelected(); const L=LAYERS[idx];
   const beh=state.beh[L.key]||[false,false,false,false,false];
   const behCount=beh.filter(Boolean).length;
   const quickCount=state.quick.filter(Boolean).length;
