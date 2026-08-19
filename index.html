@@ -196,8 +196,15 @@
   #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
   #toast.err{background:#8A3A24}
 
+  /* weekend rustscherm */
+  .rest{background:var(--card);border-radius:20px;box-shadow:var(--shadow);padding:38px 26px 32px;text-align:center}
+  .rest-emoji{font-size:44px;line-height:1;margin-bottom:10px}
+  .rest h2{margin:0 0 8px;font-size:calc(22px * var(--fs));font-weight:600;color:var(--ink)}
+  .rest p{margin:0 auto;max-width:340px;font-size:calc(15px * var(--fs));line-height:1.5;color:#4A5651}
+  .rest-back{margin-top:20px;background:var(--ink);color:var(--paper);border:none;padding:11px 20px;border-radius:11px;font-size:calc(14px * var(--fs));font-weight:600}
+
   /* accessibility */
-  .row:focus-visible,.qrow:focus-visible,.wrow:focus-visible,.tabs button:focus-visible,.tools button:focus-visible,.logoutBtn:focus-visible,.iconBtn:focus-visible,.btn-primary:focus-visible,.remind:focus-visible,.edit-banner button:focus-visible{outline:2.5px solid var(--amber);outline-offset:2px;border-radius:8px}
+  .row:focus-visible,.qrow:focus-visible,.wrow:focus-visible,.tabs button:focus-visible,.tools button:focus-visible,.logoutBtn:focus-visible,.iconBtn:focus-visible,.btn-primary:focus-visible,.remind:focus-visible,.edit-banner button:focus-visible,.rest-back:focus-visible{outline:2.5px solid var(--amber);outline-offset:2px;border-radius:8px}
   @media (prefers-reduced-motion: reduce){*{animation-duration:.001ms !important;transition-duration:.001ms !important}}
 </style>
 </head>
@@ -275,7 +282,7 @@ const firebaseConfig = {
 //  NTFY — vul hier je eigen (moeilijk te raden) topicnaam in.
 //  Laat leeg ("") om de herinner-knop te verbergen.
 // ============================================================
-const NTFY_TOPIC = "leiderschap-olivier-7k2m9x";   // bv. "leiderschap-olivier-x7k2m9"
+const NTFY_TOPIC = "";   // bv. "leiderschap-olivier-x7k2m9"
 // ============================================================
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
@@ -314,9 +321,31 @@ const INK="#12302E", AMBER="#E0B15E";
 
 const pad = n => String(n).padStart(2,"0");
 function todayKey(d=new Date()){ return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
+function isWeekend(dOrKey){
+  const d = dOrKey instanceof Date ? dOrKey : new Date((dOrKey||todayKey())+"T12:00:00");
+  const g=d.getDay(); return g===0 || g===6;   // 0=zondag, 6=zaterdag
+}
+// Willekeurige-maar-stabiele laag per WERKDAG:
+// - alleen ma t/m vr krijgen een laag; zaterdag/zondag zijn "geen dagstart"
+// - elke werkdag krijgt één laag via een hash van de datum (stabiel per dag)
+// - nooit twee keer dezelfde laag op twee opeenvolgende WERKDAGEN (weekend telt niet mee)
+// - iedereen ziet op dezelfde dag dezelfde laag; blijft eeuwig doorlopen
+function _hash(s, seed){ let h=seed>>>0; for(let i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,16777619);} return h>>>0; }
+function _rawIdx(key){ return _hash(key,2166136261) % LAYERS.length; }
 function focusIndexFor(dOrKey){
   let d = dOrKey instanceof Date ? dOrKey : new Date((dOrKey||todayKey())+"T12:00:00");
-  const s=new Date(d.getFullYear(),0,0); const day=Math.floor((d-s)/86400000); return ((day%LAYERS.length)+LAYERS.length)%LAYERS.length;
+  const key=todayKey(d);
+  // verzamel de laatste ~40 werkdag-sleutels t/m deze dag, en bouw de reeks voorwaarts op
+  const keys=[]; let c=new Date(key+"T12:00:00");
+  let guard=0;
+  while(keys.length<40 && guard<120){ const k=todayKey(c); if(!isWeekend(c)) keys.unshift(k); c=new Date(c.getTime()-86400000); guard++; }
+  let prevIdx=_rawIdx(keys[0]);
+  for(let i=1;i<keys.length;i++){
+    let idx=_rawIdx(keys[i]);
+    if(idx===prevIdx){ const step=1+(_hash(keys[i],777)%(LAYERS.length-1)); idx=(idx+step)%LAYERS.length; if(idx===prevIdx) idx=(idx+1)%LAYERS.length; }
+    prevIdx=idx;
+  }
+  return prevIdx;
 }
 function dutchDate(d=new Date()){
   if(!(d instanceof Date)) d=new Date(d+"T12:00:00");
@@ -427,15 +456,15 @@ function setTabUI(){
 }
 
 function renderHeader(){
-  const idx=focusIndexFor(selectedDay);
   document.getElementById("dateLabel").textContent = dutchDate(new Date());
   const strip=document.getElementById("pyrStrip");
   const label=document.getElementById("pyrLabel");
   strip.innerHTML=""; label.innerHTML="";
-  const todayIdx=focusIndexFor(todayKey());
+  const weekendNow = isWeekend(todayKey());
+  const todayIdx = weekendNow ? -1 : focusIndexFor(todayKey());
   LAYERS.forEach((L,i)=>{
     const seg=document.createElement("div");
-    seg.className="pyr-seg"+(i===todayIdx?" active":i<todayIdx?" done":"");
+    seg.className="pyr-seg"+(i===todayIdx?" active":"");
     strip.appendChild(seg);
     const sp=document.createElement("span");
     sp.textContent=L.short; if(i===todayIdx) sp.className="on";
@@ -462,6 +491,28 @@ function ringSVG(pct){
 
 function renderDay(view){
   const isToday = selectedDay===todayKey();
+
+  // Weekend: geen dagstart, toon een rustig scherm
+  if(isWeekend(selectedDay)){
+    const backBtn = isToday ? "" :
+      `<button class="rest-back" id="backToday">Terug naar vandaag</button>`;
+    view.innerHTML = `
+      ${isToday ? "" : `<div class="edit-banner">✎ Je bekijkt ${dutchDate(selectedDay)}<button id="backToday2">Terug naar vandaag</button></div>`}
+      <section class="rest">
+        <div class="rest-emoji">🌿</div>
+        <h2 class="serif">Geen dagstart vandaag</h2>
+        <p>Het is weekend — geniet ervan. Maandag pak je de draad weer op met een nieuwe laag.</p>
+        ${backBtn}
+      </section>
+      <section class="week-tip" style="margin-top:16px"><strong>Tip:</strong> gebruik het rustige moment gerust om via <em>Uitleg</em> nog eens een laag door te nemen.</section>
+    `;
+    const b1=view.querySelector("#backToday"), b2=view.querySelector("#backToday2");
+    const goBack=async ()=>{ currentTab="today"; selectedDay=todayKey(); await loadDay(selectedDay); setTabUI(); render(); window.scrollTo({top:0,behavior:"smooth"}); };
+    if(b1) b1.addEventListener("click", goBack);
+    if(b2) b2.addEventListener("click", goBack);
+    return;
+  }
+
   const idx=focusIndexFor(selectedDay); const L=LAYERS[idx];
   const beh=state.beh[L.key]||[false,false,false,false,false];
   const behCount=beh.filter(Boolean).length;
@@ -517,7 +568,7 @@ function renderDay(view){
       <span class="saved" id="savedFlag">✓ Opgeslagen</span>
     </section>
 
-    <p class="footnote">De focus rouleert elke dag langs de vijf lagen. Kleine herhaling zorgt voor duurzame verandering.</p>
+    <p class="footnote">Elke dag belicht de app een andere laag. Kleine, dagelijkse herhaling zorgt voor duurzame verandering.</p>
   `;
 
   if(!isToday){ view.querySelector("#backToday").addEventListener("click", async ()=>{ currentTab="today"; selectedDay=todayKey(); await loadDay(selectedDay); setTabUI(); render(); }); }
