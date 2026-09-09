@@ -1,7 +1,7 @@
 {
   "id": "./",
-  "name": "Kompas",
-  "short_name": "Kompas",
+  "name": "Voorbeeldleiderschap",
+  "short_name": "Voorbeeld",
   "description": "Dagelijkse focus voor de dagstart",
   "lang": "nl-BE",
   "dir": "ltr",
@@ -11,7 +11,10 @@
   "background_color": "#12302E",
   "theme_color": "#12302E",
   "orientation": "portrait",
-  "categories": ["productivity", "business"],
+  "categories": [
+    "productivity",
+    "business"
+  ],
   "icons": [
     {
       "src": "icon-192.png",
