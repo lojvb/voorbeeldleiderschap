@@ -53,8 +53,12 @@
   .btn-primary{width:100%;padding:14px;border:none;border-radius:12px;background:var(--ink);color:var(--paper);font-size:calc(16px * var(--fs));font-weight:600;margin-top:6px;transition:transform .12s}
   .btn-primary:active{transform:scale(.985)}
   .btn-primary:disabled{opacity:.5}
+  .btn-secondary{width:100%;padding:13px;border:1.5px solid var(--line);border-radius:12px;background:transparent;color:var(--ink);font-size:calc(15px * var(--fs));font-weight:600;margin-top:10px;transition:background .12s}
+  .btn-secondary:active{background:var(--paper2)}
+  .btn-secondary:disabled{opacity:.5}
   .login-msg{font-size:calc(13.5px * var(--fs));margin-top:14px;line-height:1.4;min-height:18px}
   .login-msg.err{color:#B23A1E}
+  .login-msg.ok{color:#2E7D5B}
   .login-foot{text-align:center;font-size:calc(12px * var(--fs));color:var(--muted);padding:0 30px 24px}
 
   #config-warn{margin:24px;padding:20px 22px;border-radius:16px;background:#FBEDE7;border:1px solid #E1785A;color:#8A3A24;font-size:15px;line-height:1.55}
@@ -155,6 +159,16 @@
   .remind .t{font-size:calc(14.5px * var(--fs));font-weight:600;display:block}
   .remind .s{font-size:calc(12.5px * var(--fs));color:var(--muted);margin-top:2px;display:block}
 
+  /* laag vastzetten */
+  .pin-card{margin-top:16px;width:100%;background:var(--card);border:1.5px solid var(--line);border-radius:16px;padding:14px 16px;display:flex;align-items:center;gap:13px;box-shadow:var(--shadow-sm);text-align:left;color:var(--ink)}
+  .pin-card.pinned{border-color:var(--amber);background:#FBF4E6;justify-content:space-between}
+  .pin-info{display:flex;align-items:center;gap:13px;min-width:0}
+  .pin-ic{width:38px;height:38px;border-radius:10px;color:#fff;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
+  .pin-t{font-size:calc(14.5px * var(--fs));font-weight:600}
+  .pin-s{font-size:calc(12.5px * var(--fs));color:var(--muted);margin-top:2px;line-height:1.35}
+  .pin-btn{flex-shrink:0;border:none;border-radius:9px;padding:9px 14px;font-size:calc(13px * var(--fs));font-weight:600;background:var(--ink);color:var(--paper)}
+  .pin-btn.off{background:var(--amber);color:var(--ink)}
+
   .footnote{text-align:center;font-size:calc(12.5px * var(--fs));color:#98A099;margin-top:22px;line-height:1.55;padding:0 16px}
 
   /* ---------- Week ---------- */
@@ -230,9 +244,10 @@
         <input id="pw" type="password" autocomplete="current-password" placeholder="••••••••" />
       </div>
       <button class="btn-primary" id="loginBtn">Inloggen</button>
+      <button class="btn-secondary" id="registerBtn">Account aanmaken</button>
       <div class="login-msg" id="loginMsg" role="status" aria-live="polite"></div>
     </div>
-    <div class="login-foot">Je gegevens blijven privé en volgen jouw account.</div>
+    <div class="login-foot">Nieuw hier? Maak een account met je Atlas Copco e-mailadres. Je gegevens blijven privé en volgen jouw account.</div>
   </div>
 </div>
 
@@ -284,7 +299,7 @@ const NTFY_TOPIC = "";   // bv. "leiderschap-olivier-x7k2m9"
 // ============================================================
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, setDoc, collection, getDocs, deleteDoc, query, orderBy, limit } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const LAYERS = [
@@ -367,6 +382,7 @@ let state = emptyState();
 let currentTab = "today";
 let selectedDay = todayKey();   // welke dag we tonen/bewerken
 let saveTimer=null, pendingSave=null;
+let pinnedLayer = null;   // vastgezette laag (index) voor deze gebruiker, of null
 
 // tekstgrootte
 const FS_STEPS=[1,1.15,1.3];
@@ -414,6 +430,7 @@ if(!CONFIG_OK){
       document.getElementById("login").classList.add("hidden");
       document.getElementById("app").classList.remove("hidden");
       selectedDay=todayKey();
+      await loadPinnedLayer();
       await loadDay(selectedDay);
       render();
     } else {
@@ -427,6 +444,7 @@ if(!CONFIG_OK){
 }
 
 const loginBtn = document.getElementById("loginBtn");
+const registerBtn = document.getElementById("registerBtn");
 const loginMsg = document.getElementById("loginMsg");
 async function doLogin(){
   const email = document.getElementById("email").value.trim();
@@ -442,14 +460,77 @@ async function doLogin(){
       ? "Te veel pogingen. Probeer het straks opnieuw." : "Inloggen lukte niet. Controleer je gegevens.";
   }finally{ loginBtn.disabled=false; }
 }
+
+// Toegestane e-maildomeinen voor zelf-registratie.
+const ALLOWED_DOMAINS = ["atlascopco.com", "external.atlascopco.com"];
+function emailDomainToegestaan(email){
+  const at = email.lastIndexOf("@");
+  if(at < 0) return false;
+  const domain = email.slice(at+1).toLowerCase();
+  // exact het domein, of exact een toegestaan subdomein — geen "nepatlascopco.com"
+  return ALLOWED_DOMAINS.includes(domain);
+}
+
+async function doRegister(){
+  const email = document.getElementById("email").value.trim();
+  const pw = document.getElementById("pw").value;
+  if(!email || !pw){ loginMsg.className="login-msg err"; loginMsg.textContent="Vul e-mail en wachtwoord in."; return; }
+  if(!emailDomainToegestaan(email)){
+    loginMsg.className="login-msg err";
+    loginMsg.textContent="Gebruik je Atlas Copco e-mailadres (@atlascopco.com of @external.atlascopco.com).";
+    return;
+  }
+  if(pw.length < 6){
+    loginMsg.className="login-msg err";
+    loginMsg.textContent="Kies een wachtwoord van minstens 6 tekens.";
+    return;
+  }
+  registerBtn.disabled=true; loginBtn.disabled=true;
+  loginMsg.className="login-msg"; loginMsg.textContent="Account aanmaken…";
+  try{
+    await createUserWithEmailAndPassword(auth, email, pw);
+    loginMsg.className="login-msg ok"; loginMsg.textContent="Account aangemaakt — je bent ingelogd.";
+    // onAuthStateChanged logt de gebruiker automatisch in
+  }catch(e){
+    loginMsg.className="login-msg err";
+    const code=(e&&e.code)||"";
+    loginMsg.textContent = code.includes("email-already-in-use")
+      ? "Er bestaat al een account met dit e-mailadres. Log gewoon in."
+      : code.includes("invalid-email") ? "Dat e-mailadres klopt niet."
+      : code.includes("weak-password") ? "Kies een sterker wachtwoord (minstens 6 tekens)."
+      : "Account aanmaken lukte niet. Probeer het opnieuw.";
+  }finally{ registerBtn.disabled=false; loginBtn.disabled=false; }
+}
 if(loginBtn){
   loginBtn.addEventListener("click", doLogin);
+  if(registerBtn) registerBtn.addEventListener("click", doRegister);
   document.getElementById("pw").addEventListener("keydown", e=>{ if(e.key==="Enter") doLogin(); });
   document.getElementById("email").addEventListener("keydown", e=>{ if(e.key==="Enter") document.getElementById("pw").focus(); });
 }
 document.getElementById("logoutBtn").addEventListener("click", async ()=>{ await flushSave(); signOut(auth); });
 
 function docRef(dayKey){ return doc(db, "users", user.uid, "days", dayKey); }
+function prefsRef(){ return doc(db, "users", user.uid, "settings", "prefs"); }
+async function loadPinnedLayer(){
+  pinnedLayer = null;
+  try{
+    const snap = await getDoc(prefsRef());
+    if(snap.exists()){
+      const d = snap.data();
+      if(typeof d.pinnedLayer === "number" && d.pinnedLayer >= 0 && d.pinnedLayer < LAYERS.length){
+        pinnedLayer = d.pinnedLayer;
+      }
+    }
+  }catch(e){}
+}
+async function savePinnedLayer(idx){
+  pinnedLayer = idx;
+  try{ await setDoc(prefsRef(), { pinnedLayer: idx }, { merge:true }); }catch(e){}
+}
+async function clearPinnedLayer(){
+  pinnedLayer = null;
+  try{ await setDoc(prefsRef(), { pinnedLayer: null }, { merge:true }); }catch(e){}
+}
 async function loadDay(dayKey){
   state = emptyState();
   try{
@@ -469,7 +550,10 @@ async function loadDay(dayKey){
 // Voor een reeds opgeslagen dag: gebruik de laag die tóén is bewaard (zodat vinkjes kloppen).
 // Voor een nieuwe/lege dag: bereken hem met de rotatie.
 function layerIdxForSelected(){
+  // Een reeds opgeslagen dag houdt zijn eigen laag (zodat oude vinkjes kloppen).
   if(state.savedFocusIdx!==null && state.savedFocusIdx!==undefined) return state.savedFocusIdx;
+  // Voor een nieuwe/lege dag: als de gebruiker een laag heeft vastgezet, gebruik die.
+  if(pinnedLayer!==null && pinnedLayer!==undefined && !isWeekend(selectedDay)) return pinnedLayer;
   return focusIndexFor(selectedDay);
 }
 // Maak een momentopname van de huidige invoer, zodat een uitgestelde opslag
@@ -519,7 +603,7 @@ function renderHeader(){
   const label=document.getElementById("pyrLabel");
   strip.innerHTML=""; label.innerHTML="";
   const weekendNow = isWeekend(todayKey());
-  const todayIdx = weekendNow ? -1 : focusIndexFor(todayKey());
+  const todayIdx = weekendNow ? -1 : ((pinnedLayer!==null && pinnedLayer!==undefined) ? pinnedLayer : focusIndexFor(todayKey()));
   LAYERS.forEach((L,i)=>{
     const seg=document.createElement("div");
     seg.className="pyr-seg"+(i===todayIdx?" active":"");
@@ -613,6 +697,8 @@ function renderDay(view){
       </div>
     </section>
 
+    ${isToday ? `<div id="pinSlot"></div>` : ""}
+
     <section class="quick">
       <div class="quick-head"><strong>Dagstart quick check</strong><span>30 sec · <span id="quickCount">${quickCount}</span>/5</span></div>
       <div id="quickList"></div>
@@ -688,7 +774,45 @@ function renderDay(view){
   const ta=view.querySelector("#noteInput");
   ta.addEventListener("input",()=>{ state.note=ta.value; queueSave(); });
 
+  renderPinButton(view, idx, L);
   updateDoneSlot(view,L);
+}
+
+function renderPinButton(view, idx, L){
+  const slot = view.querySelector("#pinSlot");
+  if(!slot) return;
+  const isPinned = (pinnedLayer!==null && pinnedLayer!==undefined);
+  if(isPinned){
+    const PL = LAYERS[pinnedLayer] || L;
+    slot.innerHTML = `
+      <div class="pin-card pinned">
+        <div class="pin-info">
+          <span class="pin-ic" style="background:${PL.color}">📌</span>
+          <div><div class="pin-t">Laag vastgezet: ${PL.name}</div>
+          <div class="pin-s">Elke werkdag blijft deze laag staan, tot je losmaakt.</div></div>
+        </div>
+        <button class="pin-btn off" id="unpinBtn">Losmaken</button>
+      </div>`;
+    slot.querySelector("#unpinBtn").addEventListener("click", async ()=>{
+      await clearPinnedLayer();
+      state.savedFocusIdx = null;      // vandaag mag weer de normale laag pakken
+      await loadDay(selectedDay);
+      render();
+      toast("Laag losgemaakt — normale afwisseling hervat.");
+    });
+  } else {
+    slot.innerHTML = `
+      <button class="pin-card" id="pinBtn">
+        <span class="pin-ic" style="background:${L.color}">📌</span>
+        <div><div class="pin-t">Deze laag vastzetten</div>
+        <div class="pin-s">Blijf langer op “${L.name}” werken in plaats van elke dag te wisselen.</div></div>
+      </button>`;
+    slot.querySelector("#pinBtn").addEventListener("click", async ()=>{
+      await savePinnedLayer(idx);
+      render();
+      toast(`“${L.name}” vastgezet. Deze laag blijft nu staan.`);
+    });
+  }
 }
 
 function updateDoneSlot(view,L){
