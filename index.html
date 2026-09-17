@@ -550,11 +550,7 @@ async function loadDay(dayKey){
 // Voor een reeds opgeslagen dag: gebruik de laag die tóén is bewaard (zodat vinkjes kloppen).
 // Voor een nieuwe/lege dag: bereken hem met de rotatie.
 function layerIdxForSelected(){
-  // Een reeds opgeslagen dag houdt zijn eigen laag (zodat oude vinkjes kloppen).
-  if(state.savedFocusIdx!==null && state.savedFocusIdx!==undefined) return state.savedFocusIdx;
-  // Voor een nieuwe/lege dag: als de gebruiker een laag heeft vastgezet, gebruik die.
-  if(pinnedLayer!==null && pinnedLayer!==undefined && !isWeekend(selectedDay)) return pinnedLayer;
-  return focusIndexFor(selectedDay);
+  return layerIdxForDay(selectedDay, state.savedFocusIdx);
 }
 // Maak een momentopname van de huidige invoer, zodat een uitgestelde opslag
 // altijd naar de júíste dag schrijft — ook als je ondertussen van dag wisselt.
@@ -566,8 +562,16 @@ function snapshotState(){
     savedFocusIdx: state.savedFocusIdx
   };
 }
+// Bepaalt welke laag bij een dag hoort, met dezelfde logica als layerIdxForSelected:
+// 1) een al opgeslagen laag blijft; 2) anders een vastgezette laag (op werkdagen);
+// 3) anders de normale rotatie.
+function layerIdxForDay(day, savedIdx){
+  if(savedIdx!==null && savedIdx!==undefined) return savedIdx;
+  if(pinnedLayer!==null && pinnedLayer!==undefined && !isWeekend(day)) return pinnedLayer;
+  return focusIndexFor(day);
+}
 async function writeDay(day, snap){
-  const focusIdx = (snap.savedFocusIdx!==null && snap.savedFocusIdx!==undefined) ? snap.savedFocusIdx : focusIndexFor(day);
+  const focusIdx = layerIdxForDay(day, snap.savedFocusIdx);
   if(day===selectedDay && (state.savedFocusIdx===null || state.savedFocusIdx===undefined)) state.savedFocusIdx=focusIdx;
   const payload = { beh:snap.beh, quick:snap.quick, note:snap.note, focusIdx, ts: new Date(day+"T12:00:00").getTime() };
   try{ await setDoc(docRef(day), payload, { merge:true }); flashSaved(); }
@@ -809,6 +813,12 @@ function renderPinButton(view, idx, L){
       </button>`;
     slot.querySelector("#pinBtn").addEventListener("click", async ()=>{
       await savePinnedLayer(idx);
+      // Vandaag de vastgezette laag laten overnemen (ook als er al een random laag was opgeslagen).
+      if(selectedDay===todayKey()){
+        state.savedFocusIdx = idx;
+        // alleen opnieuw opslaan als er al iets voor vandaag bestond, zodat de opgeslagen laag klopt
+        queueSave();
+      }
       render();
       toast(`“${L.name}” vastgezet. Deze laag blijft nu staan.`);
     });
